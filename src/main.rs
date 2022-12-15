@@ -31,10 +31,7 @@ fn main() {
 
         let command = command.trim().to_lowercase();
         match command.as_str() {
-            "exit" => {
-                database.stop().unwrap();
-                break;
-            }
+            "exit" => break,
             _ => {
                 let tokens = command
                     .split(" ")

@@ -19,7 +19,7 @@ pub struct Database {
     memtable: RBTree<String, String>,
     memtable_capacity: usize,
     compaction_kill_flag: Arc<AtomicBool>,
-    compaction_join_handle: JoinHandle<()>,
+    compaction_join_handle: Option<JoinHandle<()>>,
 }
 
 impl Database {
@@ -50,12 +50,12 @@ impl Database {
         // Start a new thread which will handle compacting segment files in
         // the background.
         let compaction_kill_flag = Arc::new(AtomicBool::new(false));
-        let compaction_join_handle = thread::spawn({
+        let compaction_join_handle = Some(thread::spawn({
             let path = path.clone();
             let segments = segments.clone();
             let flag = compaction_kill_flag.clone();
             move || compactor(path, segments, flag)
-        });
+        }));
 
         Self {
             memtable: RBTree::new(),
@@ -112,9 +112,13 @@ impl Database {
     pub fn delete(&mut self, key: &str) {
         self.memtable.remove(&key.into());
     }
+}
 
-    pub fn stop(self) -> thread::Result<()> {
+impl Drop for Database {
+    fn drop(&mut self) {
         self.compaction_kill_flag.swap(true, Ordering::Relaxed);
-        self.compaction_join_handle.join()
+        self.compaction_join_handle
+            .take()
+            .map(|h| h.join().expect("failed to join on compaction_join_handle"));
     }
 }
