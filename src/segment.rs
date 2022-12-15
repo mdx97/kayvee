@@ -1,15 +1,12 @@
-use std::{
-    fs::File,
-    io::{prelude::*, BufReader, SeekFrom},
-    path::PathBuf,
-};
+use std::fs::File;
+use std::io::prelude::*;
+use std::io::{BufReader, SeekFrom};
+use std::path::PathBuf;
 
 use bloom::BloomFilter;
 
-use crate::{
-    sparse_index::SparseIndex,
-    util::{parse_assignment, Assignment},
-};
+use crate::sparse_index::SparseIndex;
+use crate::util::Assignment;
 
 // TODO: These should probably be configurable at the Database level.
 const BLOOM_FILTER_FALSE_POSITIVE_RATE: f32 = 0.0001;
@@ -24,8 +21,27 @@ pub struct Segment {
 
 impl Segment {
     pub fn new(mut file: File, path: PathBuf) -> Self {
-        let (bloom_filter, sparse_index) =
-            create_bloom_filter_and_sparse_index_for_segment_file(&mut file);
+        file.seek(SeekFrom::Start(0)).unwrap();
+        let line_count = BufReader::new(&file).lines().count();
+
+        let mut bloom_filter =
+            BloomFilter::with_rate(BLOOM_FILTER_FALSE_POSITIVE_RATE, line_count as u32);
+
+        let mut sparse_index = SparseIndex::new();
+        let mut elapsed_bytes = 0;
+
+        file.seek(SeekFrom::Start(0)).unwrap();
+        for (i, line) in BufReader::new(&file).lines().enumerate() {
+            if let Ok(line) = line {
+                if let Ok(Assignment { key: k, .. }) = line.parse() {
+                    bloom_filter.insert(&k);
+                    if i % SPARSE_INDEX_RANGE_SIZE == 0 {
+                        sparse_index.insert(&k, elapsed_bytes);
+                    }
+                }
+                elapsed_bytes += line.as_bytes().len() as u64 + 1;
+            }
+        }
 
         Self {
             file,
@@ -42,7 +58,6 @@ impl Segment {
 
         let range = self.sparse_index.get_byte_range(&key.into());
         let start = range.start.unwrap_or(0);
-
         self.file.seek(SeekFrom::Start(start)).unwrap();
 
         let mut elapsed_bytes = start;
@@ -52,7 +67,7 @@ impl Segment {
                 break;
             }
             if let Ok(line) = line {
-                if let Ok(Assignment { key: k, value: v }) = parse_assignment(&line) {
+                if let Ok(Assignment { key: k, value: v }) = line.parse() {
                     if k == key {
                         return Some(v);
                     }
@@ -63,32 +78,4 @@ impl Segment {
 
         None
     }
-}
-
-fn create_bloom_filter_and_sparse_index_for_segment_file(
-    file: &mut File,
-) -> (BloomFilter, SparseIndex) {
-    file.seek(SeekFrom::Start(0)).unwrap();
-    let line_count = BufReader::new(&*file).lines().count();
-
-    let mut bloom_filter =
-        BloomFilter::with_rate(BLOOM_FILTER_FALSE_POSITIVE_RATE, line_count as u32);
-
-    let mut sparse_index = SparseIndex::new();
-    let mut elapsed_bytes = 0;
-
-    file.seek(SeekFrom::Start(0)).unwrap();
-    for (i, line) in BufReader::new(&*file).lines().enumerate() {
-        if let Ok(line) = line {
-            if let Ok(Assignment { key: k, .. }) = parse_assignment(&line) {
-                bloom_filter.insert(&k);
-                if i % SPARSE_INDEX_RANGE_SIZE == 0 {
-                    sparse_index.insert(&k, elapsed_bytes);
-                }
-            }
-            elapsed_bytes += line.as_bytes().len() as u64 + 1;
-        }
-    }
-
-    (bloom_filter, sparse_index)
 }

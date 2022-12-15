@@ -1,37 +1,17 @@
 mod compaction;
 mod database;
-mod memtable;
 mod segment;
 mod sparse_index;
-mod store;
 mod util;
 
-use store::StoreArgs;
-
-use crate::{
-    database::{Database, DatabaseArgs},
-    memtable::MemtableArgs,
-    util::{parse_assignment, Assignment},
-};
+use crate::database::Database;
+use crate::util::Assignment;
 
 use std::io::stdin;
 
 fn main() {
-    let database = Database::new(
-        "~/.log-kv/mydb".into(),
-        DatabaseArgs {
-            memtable: MemtableArgs { capacity: 16 },
-            store: StoreArgs {
-                compaction_enabled: false,
-                compaction_interval_seconds: 5,
-            },
-        },
-    );
+    let mut database = Database::new("~/.log-kv/mydb".into());
 
-    db_client(database);
-}
-
-fn db_client(mut database: Database) {
     println!("Log-KV");
     println!("The worst key-value store on the planet!");
     println!();
@@ -70,7 +50,7 @@ fn db_client(mut database: Database) {
                 let argument = tokens[1..].join(" ");
 
                 match command.as_str() {
-                    "set" => match parse_assignment(argument.as_str()) {
+                    "set" => match argument.parse() {
                         Ok(Assignment { key, value }) => database.set(key.as_str(), value.as_str()),
                         Err(error) => println!("Error: {}", error),
                     },

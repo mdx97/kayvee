@@ -1,61 +1,120 @@
-use crate::{
-    memtable::{Memtable, MemtableArgs},
-    store::{Store, StoreArgs},
-};
+use rbtree::RBTree;
+use walkdir::WalkDir;
 
-use std::{path::PathBuf, thread};
+use crate::compaction::compactor;
+use crate::segment::Segment;
+
+use std::fs::{self, File};
+use std::io::Write;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread::{self, JoinHandle};
+
+const DEFAULT_MEMTABLE_CAPACITY: usize = 32;
 
 pub struct Database {
-    memtable: Memtable,
-    store: Store,
-}
-
-pub struct DatabaseArgs {
-    pub memtable: MemtableArgs,
-    pub store: StoreArgs,
-}
-
-impl Default for DatabaseArgs {
-    fn default() -> Self {
-        Self {
-            memtable: Default::default(),
-            store: Default::default(),
-        }
-    }
+    path: PathBuf,
+    segments: Arc<Mutex<Vec<Segment>>>,
+    memtable: RBTree<String, String>,
+    memtable_capacity: usize,
+    compaction_kill_flag: Arc<AtomicBool>,
+    compaction_join_handle: JoinHandle<()>,
 }
 
 impl Database {
-    pub fn new(path: PathBuf, DatabaseArgs { memtable, store }: DatabaseArgs) -> Self {
+    pub fn new(path: PathBuf) -> Self {
+        // Initialize on-disk representation of the database by creating the
+        // directory if it doesn't exist, or reading the segment files in the
+        // given directory if it does exist.
+        let mut segments = Vec::new();
+        if !path.exists() {
+            fs::create_dir_all(path.clone()).unwrap();
+        } else {
+            let entries = WalkDir::new(path.clone())
+                .follow_links(false)
+                .into_iter()
+                .filter_map(|e| e.ok());
+
+            for entry in entries {
+                let filename = entry.file_name().to_string_lossy();
+                if filename.starts_with("segment") {
+                    let file = File::open(entry.path()).unwrap();
+                    segments.push(Segment::new(file, PathBuf::from(entry.path())));
+                }
+            }
+        }
+
+        let segments = Arc::new(Mutex::new(segments));
+
+        // Start a new thread which will handle compacting segment files in
+        // the background.
+        let compaction_kill_flag = Arc::new(AtomicBool::new(false));
+        let compaction_join_handle = thread::spawn({
+            let path = path.clone();
+            let segments = segments.clone();
+            let flag = compaction_kill_flag.clone();
+            move || compactor(path, segments, flag)
+        });
+
         Self {
-            memtable: Memtable::new(memtable),
-            store: Store::new(path, store),
+            memtable: RBTree::new(),
+            memtable_capacity: DEFAULT_MEMTABLE_CAPACITY,
+            path,
+            segments,
+            compaction_kill_flag,
+            compaction_join_handle,
         }
     }
 
     pub fn set(&mut self, key: &str, value: &str) {
-        self.memtable.set(key, value);
-        if self.memtable.full() {
-            self.flush_memtable();
+        self.memtable.replace_or_insert(key.into(), value.into());
+
+        // If the memtable has filled to capacity, we "flush" it and write its
+        // contents to a new segment file.
+        if self.memtable.len() >= self.memtable_capacity {
+            let mut files = self.segments.lock().unwrap();
+            let path = self.path.clone().join(
+                // TODO: This should be based on the segment file with the highest number + 1, not the length.
+                // This is because we compact files now so segment_files.len() won't always be equal to the highest
+                // numbered segment file.
+                format!("segment-{}.dat", files.len() + 1),
+            );
+            let mut file = File::create(path.clone()).unwrap();
+
+            for (key, value) in self.memtable.iter() {
+                file.write_all(format!("{}={}\n", key, value).as_bytes())
+                    .unwrap();
+            }
+
+            files.push(Segment::new(File::open(path.clone()).unwrap(), path));
+            self.memtable = RBTree::new();
         }
     }
 
     pub fn get(&mut self, key: &str) -> Option<String> {
-        if let Some(value) = self.memtable.get(key) {
-            return Some(value);
+        // First, check to see if the key exists in the memtable.
+        if let Some(value) = self.memtable.get(&key.into()) {
+            return Some(value.to_owned());
         }
-        self.store.get(key)
+
+        // If it doesn't, check our segment files for the key.
+        let mut segments = self.segments.lock().unwrap();
+        for segment in segments.iter_mut().rev() {
+            if let Some(value) = segment.get(key) {
+                return Some(value);
+            }
+        }
+
+        None
     }
 
     pub fn delete(&mut self, key: &str) {
-        self.memtable.delete(key);
+        self.memtable.remove(&key.into());
     }
 
     pub fn stop(self) -> thread::Result<()> {
-        self.store.stop()
-    }
-
-    fn flush_memtable(&mut self) {
-        self.store.write_memtable(&self.memtable);
-        self.memtable.reset();
+        self.compaction_kill_flag.swap(true, Ordering::Relaxed);
+        self.compaction_join_handle.join()
     }
 }

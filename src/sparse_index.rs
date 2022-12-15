@@ -1,4 +1,5 @@
-use std::{collections::BTreeMap, ops::Range};
+use std::collections::BTreeMap;
+use std::ops::Range;
 
 pub struct SparseIndex {
     index: BTreeMap<String, u64>,
