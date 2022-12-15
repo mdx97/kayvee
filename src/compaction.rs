@@ -13,8 +13,8 @@ use crate::segment::Segment;
 use crate::util::Assignment;
 
 pub fn compactor(
-    path: PathBuf,
-    config: Config,
+    path: &PathBuf,
+    config: &Config,
     segments: Arc<Mutex<Vec<Segment>>>,
     compaction_kill_flag: Arc<AtomicBool>,
 ) {

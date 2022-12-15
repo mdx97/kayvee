@@ -26,25 +26,26 @@ impl Database {
         // Initialize on-disk representation of the database by creating the
         // directory if it doesn't exist, or reading the segment files in the
         // given directory if it does exist.
-        let mut segments = Vec::new();
-        if !path.exists() {
+        let segments = Arc::new(Mutex::new(if !path.exists() {
             fs::create_dir_all(path.clone()).unwrap();
+            Vec::new()
         } else {
-            let entries = WalkDir::new(path.clone())
+            WalkDir::new(path.clone())
                 .follow_links(false)
                 .into_iter()
-                .filter_map(|e| e.ok());
-
-            for entry in entries {
-                let filename = entry.file_name().to_string_lossy();
-                if filename.starts_with("segment") {
-                    let file = File::open(entry.path()).unwrap();
-                    segments.push(Segment::new(file, PathBuf::from(entry.path()), &config));
-                }
-            }
-        }
-
-        let segments = Arc::new(Mutex::new(segments));
+                .filter_map(|e| e.ok())
+                .filter_map(|entry| {
+                    entry
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with("segment")
+                        .then(|| {
+                            let file = File::open(entry.path()).unwrap();
+                            Segment::new(file, PathBuf::from(entry.path()), &config)
+                        })
+                })
+                .collect()
+        }));
 
         // Start a new thread which will handle compacting segment files in
         // the background.
@@ -54,7 +55,7 @@ impl Database {
             let config = config.clone();
             let segments = segments.clone();
             let flag = compaction_kill_flag.clone();
-            move || compactor(path, config, segments, flag)
+            move || compactor(&path, &config, segments, flag)
         }));
 
         Self {
