@@ -49,16 +49,16 @@ fn main() {
                 let argument = tokens[1..].join(" ");
 
                 match command.as_str() {
-                    "set" => match argument.parse() {
-                        Ok(Assignment { key, value }) => database.set(key.as_str(), value.as_str()),
+                    "set" => match Assignment::try_from(argument.as_str()) {
+                        Ok(Assignment { key, value }) => database.set(key, value),
                         Err(error) => println!("Error: {}", error),
                     },
-                    "get" => match database.get(argument.as_ref()) {
+                    "get" => match database.get(&argument) {
                         Some(value) => println!("{}", value),
                         None => println!("Error: Not found!"),
                     },
                     "del" => {
-                        database.delete(argument.as_ref());
+                        database.delete(&argument);
                     }
                     _ => {
                         println!("Error: Invalid command!");

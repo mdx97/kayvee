@@ -24,14 +24,14 @@ pub fn compactor(
             let mut segments = segments.lock().unwrap();
             if segments.len() >= 2 {
                 let new_segment_file;
-                let new_segment_path = path.clone().join("new-segment.dat");
+                let new_segment_path = path.join("new-segment.dat");
                 {
                     let (a, b) = segments.split_at_mut(1);
                     let first = &mut a[0].file;
                     let second = &mut b[0].file;
 
                     new_segment_file = Some({
-                        let mut new_segment_file = File::create(path.clone()).unwrap();
+                        let mut new_segment_file = File::create(path).unwrap();
 
                         first.seek(SeekFrom::Start(0)).unwrap();
                         second.seek(SeekFrom::Start(0)).unwrap();
@@ -45,8 +45,11 @@ pub fn compactor(
                             let second_line: String =
                                 second_iter.peek().unwrap().as_ref().unwrap().into();
 
-                            let first_assignment: Assignment = first_line.parse().unwrap();
-                            let second_assignment: Assignment = second_line.parse().unwrap();
+                            let first_assignment =
+                                Assignment::try_from(first_line.as_str()).unwrap();
+
+                            let second_assignment =
+                                Assignment::try_from(second_line.as_str()).unwrap();
 
                             match first_assignment.key.cmp(&second_assignment.key) {
                                 cmp::Ordering::Less => {
@@ -89,7 +92,7 @@ pub fn compactor(
 
                 fs::remove_file(&segments[0].path).unwrap();
                 fs::remove_file(&segments[1].path).unwrap();
-                fs::rename(new_segment_path, segments[1].path.clone()).unwrap();
+                fs::rename(new_segment_path, &segments[1].path).unwrap();
 
                 segments.splice(0..2, [new_segment_file.unwrap()]);
             }

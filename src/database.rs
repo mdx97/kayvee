@@ -5,6 +5,7 @@ use crate::compaction::compactor;
 use crate::config::Config;
 use crate::segment::Segment;
 
+use std::borrow::Cow;
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::PathBuf;
@@ -27,10 +28,10 @@ impl Database {
         // directory if it doesn't exist, or reading the segment files in the
         // given directory if it does exist.
         let segments = Arc::new(Mutex::new(if !path.exists() {
-            fs::create_dir_all(path.clone()).unwrap();
+            fs::create_dir_all(&path).unwrap();
             Vec::new()
         } else {
-            WalkDir::new(path.clone())
+            WalkDir::new(&path)
                 .follow_links(false)
                 .into_iter()
                 .filter_map(|e| e.ok())
@@ -68,24 +69,24 @@ impl Database {
         }
     }
 
-    pub fn set(&mut self, key: &str, value: &str) {
+    pub fn set(&mut self, key: impl Into<String>, value: impl Into<String>) {
         self.memtable.replace_or_insert(key.into(), value.into());
         if self.memtable.len() >= self.config.memtable_capacity {
             self.flush_memtable();
         }
     }
 
-    pub fn get(&mut self, key: &str) -> Option<String> {
+    pub fn get(&mut self, key: &str) -> Option<Cow<'_, String>> {
         // First, check to see if the key exists in the memtable.
         if let Some(value) = self.memtable.get(&key.into()) {
-            return Some(value.to_owned());
+            return Some(Cow::Borrowed(value));
         }
 
         // If it doesn't, check our segment files for the key.
         let mut segments = self.segments.lock().unwrap();
         for segment in segments.iter_mut().rev() {
-            if let Some(value) = segment.get(key) {
-                return Some(value);
+            if let Some(value) = segment.get(&key) {
+                return Some(Cow::Owned(value));
             }
         }
 
@@ -98,25 +99,20 @@ impl Database {
 
     fn flush_memtable(&mut self) {
         let mut files = self.segments.lock().unwrap();
-        let path = self.path.clone().join(
+        let path = self.path.join(
             // TODO: This should be based on the segment file with the highest number + 1, not the length.
             // This is because we compact files now so segment_files.len() won't always be equal to the highest
             // numbered segment file.
             format!("segment-{}.dat", files.len() + 1),
         );
-        let mut file = File::create(path.clone()).unwrap();
+        let mut file = File::create(&path).unwrap();
 
         for (key, value) in self.memtable.iter() {
             file.write_all(format!("{}={}\n", key, value).as_bytes())
                 .unwrap();
         }
 
-        files.push(Segment::new(
-            File::open(path.clone()).unwrap(),
-            path,
-            &self.config,
-        ));
-
+        files.push(Segment::new(File::open(&path).unwrap(), path, &self.config));
         self.memtable = RBTree::new();
     }
 }

@@ -30,7 +30,7 @@ impl Segment {
         file.seek(SeekFrom::Start(0)).unwrap();
         for (i, line) in BufReader::new(&file).lines().enumerate() {
             if let Ok(line) = line {
-                if let Ok(Assignment { key: k, .. }) = line.parse() {
+                if let Ok(Assignment { key: k, .. }) = Assignment::try_from(line.as_str()) {
                     bloom_filter.insert(&k);
                     if i % config.sparse_index_range_size == 0 {
                         sparse_index.insert(&k, elapsed_bytes);
@@ -64,9 +64,9 @@ impl Segment {
                 break;
             }
             if let Ok(line) = line {
-                if let Ok(Assignment { key: k, value: v }) = line.parse() {
+                if let Ok(Assignment { key: k, value: v }) = Assignment::try_from(line.as_str()) {
                     if k == key {
-                        return Some(v);
+                        return Some(v.to_owned());
                     }
                 }
                 elapsed_bytes += line.as_bytes().len() as u64 + 1;
