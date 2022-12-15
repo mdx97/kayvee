@@ -70,31 +70,8 @@ impl Database {
 
     pub fn set(&mut self, key: &str, value: &str) {
         self.memtable.replace_or_insert(key.into(), value.into());
-
-        // If the memtable has filled to capacity, we "flush" it and write its
-        // contents to a new segment file.
         if self.memtable.len() >= self.config.memtable_capacity {
-            let mut files = self.segments.lock().unwrap();
-            let path = self.path.clone().join(
-                // TODO: This should be based on the segment file with the highest number + 1, not the length.
-                // This is because we compact files now so segment_files.len() won't always be equal to the highest
-                // numbered segment file.
-                format!("segment-{}.dat", files.len() + 1),
-            );
-            let mut file = File::create(path.clone()).unwrap();
-
-            for (key, value) in self.memtable.iter() {
-                file.write_all(format!("{}={}\n", key, value).as_bytes())
-                    .unwrap();
-            }
-
-            files.push(Segment::new(
-                File::open(path.clone()).unwrap(),
-                path,
-                &self.config,
-            ));
-
-            self.memtable = RBTree::new();
+            self.flush_memtable();
         }
     }
 
@@ -118,6 +95,30 @@ impl Database {
     pub fn delete(&mut self, key: &str) {
         self.memtable.remove(&key.into());
     }
+
+    fn flush_memtable(&mut self) {
+        let mut files = self.segments.lock().unwrap();
+        let path = self.path.clone().join(
+            // TODO: This should be based on the segment file with the highest number + 1, not the length.
+            // This is because we compact files now so segment_files.len() won't always be equal to the highest
+            // numbered segment file.
+            format!("segment-{}.dat", files.len() + 1),
+        );
+        let mut file = File::create(path.clone()).unwrap();
+
+        for (key, value) in self.memtable.iter() {
+            file.write_all(format!("{}={}\n", key, value).as_bytes())
+                .unwrap();
+        }
+
+        files.push(Segment::new(
+            File::open(path.clone()).unwrap(),
+            path,
+            &self.config,
+        ));
+
+        self.memtable = RBTree::new();
+    }
 }
 
 impl Drop for Database {
@@ -126,5 +127,7 @@ impl Drop for Database {
         self.compaction_join_handle
             .take()
             .map(|h| h.join().expect("failed to join on compaction_join_handle"));
+
+        self.flush_memtable();
     }
 }
