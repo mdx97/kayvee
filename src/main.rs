@@ -1,16 +1,18 @@
 mod compaction;
+mod config;
 mod database;
 mod segment;
 mod sparse_index;
 mod util;
 
+use crate::config::Config;
 use crate::database::Database;
 use crate::util::Assignment;
 
 use std::io::stdin;
 
 fn main() {
-    let mut database = Database::new("~/.log-kv/mydb".into());
+    let mut database = Database::new("~/.log-kv/mydb".into(), Config::default());
 
     println!("Log-KV");
     println!("The worst key-value store on the planet!");

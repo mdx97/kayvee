@@ -5,12 +5,9 @@ use std::path::PathBuf;
 
 use bloom::BloomFilter;
 
+use crate::config::Config;
 use crate::sparse_index::SparseIndex;
 use crate::util::Assignment;
-
-// TODO: These should probably be configurable at the Database level.
-const BLOOM_FILTER_FALSE_POSITIVE_RATE: f32 = 0.0001;
-const SPARSE_INDEX_RANGE_SIZE: usize = 4;
 
 pub struct Segment {
     pub file: File,
@@ -20,12 +17,12 @@ pub struct Segment {
 }
 
 impl Segment {
-    pub fn new(mut file: File, path: PathBuf) -> Self {
+    pub fn new(mut file: File, path: PathBuf, config: &Config) -> Self {
         file.seek(SeekFrom::Start(0)).unwrap();
         let line_count = BufReader::new(&file).lines().count();
 
         let mut bloom_filter =
-            BloomFilter::with_rate(BLOOM_FILTER_FALSE_POSITIVE_RATE, line_count as u32);
+            BloomFilter::with_rate(config.bloom_filter_false_positive_rate, line_count as u32);
 
         let mut sparse_index = SparseIndex::new();
         let mut elapsed_bytes = 0;
@@ -35,7 +32,7 @@ impl Segment {
             if let Ok(line) = line {
                 if let Ok(Assignment { key: k, .. }) = line.parse() {
                     bloom_filter.insert(&k);
-                    if i % SPARSE_INDEX_RANGE_SIZE == 0 {
+                    if i % config.sparse_index_range_size == 0 {
                         sparse_index.insert(&k, elapsed_bytes);
                     }
                 }

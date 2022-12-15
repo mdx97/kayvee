@@ -8,19 +8,19 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::config::Config;
 use crate::segment::Segment;
 use crate::util::Assignment;
 
-const COMPACTOR_INTERVAL_SECONDS: u64 = 10;
-
 pub fn compactor(
     path: PathBuf,
+    config: Config,
     segments: Arc<Mutex<Vec<Segment>>>,
     compaction_kill_flag: Arc<AtomicBool>,
 ) {
     let mut last_compaction = Instant::now();
     while !compaction_kill_flag.load(Ordering::Relaxed) {
-        if last_compaction.elapsed().as_secs() >= COMPACTOR_INTERVAL_SECONDS {
+        if last_compaction.elapsed().as_secs() >= config.compactor_interval_seconds {
             let mut segments = segments.lock().unwrap();
             if segments.len() >= 2 {
                 let new_segment_file;
@@ -83,7 +83,7 @@ pub fn compactor(
                             }
                         }
 
-                        Segment::new(new_segment_file, path.clone())
+                        Segment::new(new_segment_file, path.clone(), &config)
                     });
                 }
 

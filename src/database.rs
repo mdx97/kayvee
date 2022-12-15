@@ -2,6 +2,7 @@ use rbtree::RBTree;
 use walkdir::WalkDir;
 
 use crate::compaction::compactor;
+use crate::config::Config;
 use crate::segment::Segment;
 
 use std::fs::{self, File};
@@ -11,19 +12,17 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
-const DEFAULT_MEMTABLE_CAPACITY: usize = 32;
-
 pub struct Database {
     path: PathBuf,
+    config: Config,
     segments: Arc<Mutex<Vec<Segment>>>,
     memtable: RBTree<String, String>,
-    memtable_capacity: usize,
     compaction_kill_flag: Arc<AtomicBool>,
     compaction_join_handle: Option<JoinHandle<()>>,
 }
 
 impl Database {
-    pub fn new(path: PathBuf) -> Self {
+    pub fn new(path: PathBuf, config: Config) -> Self {
         // Initialize on-disk representation of the database by creating the
         // directory if it doesn't exist, or reading the segment files in the
         // given directory if it does exist.
@@ -40,7 +39,7 @@ impl Database {
                 let filename = entry.file_name().to_string_lossy();
                 if filename.starts_with("segment") {
                     let file = File::open(entry.path()).unwrap();
-                    segments.push(Segment::new(file, PathBuf::from(entry.path())));
+                    segments.push(Segment::new(file, PathBuf::from(entry.path()), &config));
                 }
             }
         }
@@ -52,16 +51,17 @@ impl Database {
         let compaction_kill_flag = Arc::new(AtomicBool::new(false));
         let compaction_join_handle = Some(thread::spawn({
             let path = path.clone();
+            let config = config.clone();
             let segments = segments.clone();
             let flag = compaction_kill_flag.clone();
-            move || compactor(path, segments, flag)
+            move || compactor(path, config, segments, flag)
         }));
 
         Self {
-            memtable: RBTree::new(),
-            memtable_capacity: DEFAULT_MEMTABLE_CAPACITY,
             path,
+            config,
             segments,
+            memtable: RBTree::new(),
             compaction_kill_flag,
             compaction_join_handle,
         }
@@ -72,7 +72,7 @@ impl Database {
 
         // If the memtable has filled to capacity, we "flush" it and write its
         // contents to a new segment file.
-        if self.memtable.len() >= self.memtable_capacity {
+        if self.memtable.len() >= self.config.memtable_capacity {
             let mut files = self.segments.lock().unwrap();
             let path = self.path.clone().join(
                 // TODO: This should be based on the segment file with the highest number + 1, not the length.
@@ -87,7 +87,12 @@ impl Database {
                     .unwrap();
             }
 
-            files.push(Segment::new(File::open(path.clone()).unwrap(), path));
+            files.push(Segment::new(
+                File::open(path.clone()).unwrap(),
+                path,
+                &self.config,
+            ));
+
             self.memtable = RBTree::new();
         }
     }
